@@ -87,13 +87,41 @@ get_latest_version() {
     local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
     log_verbose "Fetching latest version from: $api_url"
     
+    local response
     if command -v curl >/dev/null 2>&1; then
-        curl -s "$api_url" | grep '"tag_name":' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/'
+        response=$(curl -s "$api_url")
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$api_url" | grep '"tag_name":' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/'
+        response=$(wget -qO- "$api_url")
     else
         log_error "Neither curl nor wget is available. Please install one of them."
         exit 1
+    fi
+    
+    # Check for API rate limiting
+    if echo "$response" | grep -q "API rate limit exceeded"; then
+        log_warning "GitHub API rate limit exceeded. Using fallback version v2.0.0"
+        log_info "You can specify a version explicitly with: --version v2.0.0"
+        echo "v2.0.0"
+        return 0
+    fi
+    
+    # Check for other API errors
+    if echo "$response" | grep -q '"message"'; then
+        log_warning "GitHub API error. Using fallback version v2.0.0"
+        log_verbose "API response: $response"
+        echo "v2.0.0"
+        return 0
+    fi
+    
+    # Extract version from response
+    local version
+    version=$(echo "$response" | grep '"tag_name":' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+    
+    if [[ -z "$version" ]]; then
+        log_warning "Could not parse version from API response. Using fallback version v2.0.0"
+        echo "v2.0.0"
+    else
+        echo "$version"
     fi
 }
 

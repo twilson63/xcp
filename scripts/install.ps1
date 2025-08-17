@@ -84,8 +84,16 @@ function Get-LatestVersion {
         return $response.tag_name
     }
     catch {
-        Write-Error "Failed to fetch latest version: $($_.Exception.Message)"
-        exit 1
+        # Check if it's a rate limiting error
+        if ($_.Exception.Message -like "*rate limit*" -or $_.Exception.Message -like "*403*") {
+            Write-Warning "GitHub API rate limit exceeded. Using fallback version v2.0.0"
+            Write-Info "You can specify a version explicitly with: -Version v2.0.0"
+            return "v2.0.0"
+        }
+        
+        Write-Warning "GitHub API error. Using fallback version v2.0.0"
+        Write-VerboseLog "API error: $($_.Exception.Message)"
+        return "v2.0.0"
     }
 }
 
