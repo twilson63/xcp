@@ -36,6 +36,9 @@ type CLI struct {
 	showVersion bool
 	showHelp    bool
 	overwrite   bool
+	method      string
+	tempDir     string
+	verbose     bool
 }
 
 // Options for configuring the CLI
@@ -69,6 +72,9 @@ func New(opts Options) *CLI {
 	cli.flagSet.BoolVar(&cli.showHelp, "h", false, "Show help information (shorthand)")
 	cli.flagSet.BoolVar(&cli.overwrite, "overwrite", false, "Overwrite existing files")
 	cli.flagSet.BoolVar(&cli.overwrite, "f", false, "Overwrite existing files (shorthand)")
+	cli.flagSet.StringVar(&cli.method, "method", "zip", "Download method: zip (default) or api")
+	cli.flagSet.StringVar(&cli.tempDir, "temp-dir", "", "Custom temporary directory for zip extraction")
+	cli.flagSet.BoolVar(&cli.verbose, "verbose", false, "Enable verbose output")
 
 	return cli
 }
@@ -105,6 +111,12 @@ func (c *CLI) Run(args []string) error {
 		return fmt.Errorf("invalid source URL: %w", err)
 	}
 
+	// Also parse with enhanced parser for zip downloader
+	parsedURL, err := github.ParseGitHubURLWithRef(sourceURL)
+	if err != nil {
+		return fmt.Errorf("invalid source URL: %w", err)
+	}
+
 	// Determine target path
 	var targetPath string
 	outputToStdout := false
@@ -130,19 +142,40 @@ func (c *CLI) Run(args []string) error {
 		}
 	}
 
-	// Create default downloader if none provided
-	if c.downloader == nil {
-		client := github.NewClient()
-		c.downloader = downloader.NewDownloader(client, c.stdout, c.stderr)
-	}
-
 	// Set download options
 	opts := downloader.DownloadOptions{
 		OutputToStdout: outputToStdout,
 		Overwrite:      c.overwrite,
 	}
 
-	// Download the content
+	// Use zip downloader for new method (only if no custom downloader provided)
+	if c.method == "zip" && c.downloader == nil {
+		var zipDownloader *downloader.ZipDownloader
+		if c.tempDir != "" {
+			zipDownloader = downloader.NewZipDownloaderWithTempDir(c.tempDir, c.stdout, c.stderr)
+		} else {
+			zipDownloader = downloader.NewZipDownloader(c.stdout, c.stderr)
+		}
+
+		// Create download request from parsed URL
+		req := downloader.DownloadRequest{
+			Owner:  parsedURL.Owner,
+			Repo:   parsedURL.Repo,
+			Path:   parsedURL.Path,
+			Ref:    parsedURL.Ref,
+			Target: targetPath,
+		}
+
+		return zipDownloader.Download(req)
+	}
+
+	// Create default API downloader if none provided
+	if c.downloader == nil {
+		client := github.NewClient()
+		c.downloader = downloader.NewDownloader(client, c.stdout, c.stderr)
+	}
+
+	// Use the provided downloader (for tests) or fallback to API downloader
 	return c.downloader.Download(source, targetPath, opts)
 }
 
@@ -155,7 +188,7 @@ func (c *CLI) printHelp() {
 	fmt.Fprintln(c.stderr, "  xcp [options] <source> [target]")
 	fmt.Fprintln(c.stderr)
 	fmt.Fprintln(c.stderr, "Arguments:")
-	fmt.Fprintln(c.stderr, "  source:  github:owner/repo/path")
+	fmt.Fprintln(c.stderr, "  source:  github:owner/repo/path[@ref]")
 	fmt.Fprintln(c.stderr, "  target:  local directory or file (defaults to current directory)")
 	fmt.Fprintln(c.stderr)
 	fmt.Fprintln(c.stderr, "Options:")
@@ -163,7 +196,10 @@ func (c *CLI) printHelp() {
 	fmt.Fprintln(c.stderr)
 	fmt.Fprintln(c.stderr, "Examples:")
 	fmt.Fprintln(c.stderr, "  xcp github:twilson63/qa")
+	fmt.Fprintln(c.stderr, "  xcp github:twilson63/qa@main")
+	fmt.Fprintln(c.stderr, "  xcp github:twilson63/qa@v1.0.0")
 	fmt.Fprintln(c.stderr, "  xcp github:twilson63/foo/data.json | jq")
 	fmt.Fprintln(c.stderr, "  xcp github:twilson63/qa ./target/path")
-	fmt.Fprintln(c.stderr, "  xcp github:twilson63/foo/data.json ./target/path")
+	fmt.Fprintln(c.stderr, "  xcp --method=api github:twilson63/qa")
+	fmt.Fprintln(c.stderr, "  xcp --verbose --temp-dir=/tmp github:twilson63/qa")
 }
